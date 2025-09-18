@@ -4,13 +4,8 @@ import streamlit as st
 import json
 import os
 import requests
-import time
 import pandas as pd
 import snowflake.connector
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv(dotenv_path=r"C:\Users\MohanGandi\Desktop\Python\SECRETS.env")
 
 # Streamlit config
 st.set_page_config(page_title="Cortex AI Assistant", layout="wide")
@@ -22,32 +17,52 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Connect using snowflake-connector-python
+# --------------------------
+# Load secrets
+# --------------------------
 try:
-    st.write("DEBUG: Snowflake USER:", st.secrets["snowflake"].get("USER"))
-    st.write("DEBUG: Snowflake ACCOUNT:", st.secrets["snowflake"].get("ACCOUNT"))
+    SNOWFLAKE_USER = st.secrets["snowflake"]["USER"]
+    SNOWFLAKE_PASSWORD = st.secrets["snowflake"]["PASSWORD"]
+    SNOWFLAKE_ACCOUNT = st.secrets["snowflake"]["ACCOUNT"]
+    SNOWFLAKE_ROLE = st.secrets["snowflake"]["ROLE"]
+    SNOWFLAKE_WAREHOUSE = st.secrets["snowflake"]["WAREHOUSE"]
+    SNOWFLAKE_DATABASE = st.secrets["snowflake"]["DATABASE"]
+    SNOWFLAKE_SCHEMA = st.secrets["snowflake"]["SCHEMA"]
 
+    API_ENDPOINT = st.secrets["cortex"]["API_ENDPOINT"]
+    API_TIMEOUT = int(st.secrets["cortex"].get("API_TIMEOUT", 50000))
+    SEMANTIC_MODEL = st.secrets["cortex"].get(
+        "SEMANTIC_MODEL",
+        '@"GRANTS"."GS"."GSTAGE"/GRANTS_CHATBOT.yaml'
+    )
+
+    st.write("DEBUG: Snowflake USER:", SNOWFLAKE_USER)
+    st.write("DEBUG: Snowflake ACCOUNT:", SNOWFLAKE_ACCOUNT)
+except Exception as e:
+    st.error("❌ Missing secrets in .streamlit/secrets.toml")
+    st.stop()
+
+# --------------------------
+# Connect to Snowflake
+# --------------------------
+try:
     conn = snowflake.connector.connect(
-        user=st.secrets["snowflake"]["USER"],
-        password=st.secrets["snowflake"]["PASSWORD"],
-        account=st.secrets["snowflake"]["ACCOUNT"],
-        role=st.secrets["snowflake"]["ROLE"],
-        warehouse=st.secrets["snowflake"]["WAREHOUSE"],
-        database=st.secrets["snowflake"]["DATABASE"],
-        schema=st.secrets["snowflake"]["SCHEMA"]
-)
+        user=SNOWFLAKE_USER,
+        password=SNOWFLAKE_PASSWORD,
+        account=SNOWFLAKE_ACCOUNT,
+        role=SNOWFLAKE_ROLE,
+        warehouse=SNOWFLAKE_WAREHOUSE,
+        database=SNOWFLAKE_DATABASE,
+        schema=SNOWFLAKE_SCHEMA
+    )
     st.info("✅ Connected to Snowflake using snowflake-connector-python")
 except Exception as e:
     st.error(f"❌ Connection failed: {str(e)}")
     conn = None
 
-# Load other env vars
-API_ENDPOINT = os.getenv("API_ENDPOINT")
-API_TIMEOUT = int(os.getenv("API_TIMEOUT", 50000))
-CORTEX_SEARCH_SERVICES = os.getenv("CORTEX_SEARCH_SERVICES")
-SEMANTIC_MODEL = '@"GRANTS"."GS"."GSTAGE"/GRANTS_CHATBOT.yaml'
-
-# Run a query
+# --------------------------
+# Run SQL query
+# --------------------------
 def run_snowflake_query(query):
     if not conn:
         st.error("❌ No active connection.")
@@ -65,7 +80,9 @@ def run_snowflake_query(query):
         st.error(f"❌ SQL Execution Error: {str(e)}")
         return None
 
-# Complete fallback
+# --------------------------
+# COMPLETE fallback
+# --------------------------
 def complete(prompt, model="mistral-large"):
     if not conn:
         st.error("❌ No active connection.")
@@ -84,28 +101,25 @@ def complete(prompt, model="mistral-large"):
         st.error(f"❌ COMPLETE Function Error: {str(e)}")
         return None
 
-# API Call with explicit token retrieval
+# --------------------------
+# Cortex API Call
+# --------------------------
 def snowflake_api_call(query, semantic_model=SEMANTIC_MODEL):
     if not conn:
         st.error("❌ No active connection.")
         return None
-
-    cur = conn.cursor()
     try:
-        # Get the session token explicitly
+        cur = conn.cursor()
         cur.execute("SELECT CURRENT_SESSION()")
         session_id = cur.fetchone()[0]
         cur.close()
 
-        # You will need to handle authentication properly
-        # For demonstration, this assumes you have the right session or use key-pair auth
         st.info(f"✅ Session ID: {session_id}")
 
-        # Example: making request (this part needs proper auth setup)
-        account = os.getenv("SNOWFLAKE_ACCOUNT")
-        url = f"https://{account}.snowflakecomputing.com{API_ENDPOINT}"
+        # Build Cortex API URL correctly
+        url = f"https://{SNOWFLAKE_ACCOUNT}.snowflakecomputing.com{API_ENDPOINT}"
         headers = {
-            "Authorization": "Bearer YOUR_AUTH_TOKEN",  # Replace with actual method
+            "Authorization": f"Bearer {SNOWFLAKE_PASSWORD}",  # ⚠️ Replace with correct auth
             "Content-Type": "application/json"
         }
         payload = {
@@ -122,17 +136,18 @@ def snowflake_api_call(query, semantic_model=SEMANTIC_MODEL):
             "max_tokens": 500,
             "stream": True
         }
-        raw_payload = json.dumps(payload)
-        st.write("Raw Payload:", raw_payload)
+
         st.write("Request URL:", url)
+        st.json(payload)
 
         response = requests.post(url, headers=headers, json=payload, timeout=API_TIMEOUT / 1000)
         response.raise_for_status()
+
         events = []
         for line in response.iter_lines():
             if line:
-                line = line.decode('utf-8').strip()
-                if line.startswith('data:'):
+                line = line.decode("utf-8").strip()
+                if line.startswith("data:"):
                     data = json.loads(line[5:])
                     events.append(data)
         return events
@@ -140,33 +155,38 @@ def snowflake_api_call(query, semantic_model=SEMANTIC_MODEL):
         st.error(f"❌ API Request Failed: {str(e)}")
         return None
 
+# --------------------------
+# Process Cortex response
+# --------------------------
 def process_sse_response(response):
     sql = ""
     if not response:
         return sql
     try:
         for event in response:
-            if isinstance(event, dict) and event.get('event') == "message.delta":
-                data = event.get('data', {})
-                delta = data.get('delta', {})
-                for content_item in delta.get('content', []):
-                    if content_item.get('type') == "tool_results":
-                        tool_results = content_item.get('tool_results', {})
-                        if 'content' in tool_results:
-                            for result in tool_results['content']:
-                                if result.get('type') == 'json':
-                                    result_data = result.get('json', {})
-                                    if 'sql' in result_data:
-                                        sql += " " + result_data.get('sql', '')
+            if isinstance(event, dict) and event.get("event") == "message.delta":
+                data = event.get("data", {})
+                delta = data.get("delta", {})
+                for content_item in delta.get("content", []):
+                    if content_item.get("type") == "tool_results":
+                        tool_results = content_item.get("tool_results", {})
+                        if "content" in tool_results:
+                            for result in tool_results["content"]:
+                                if result.get("type") == "json":
+                                    result_data = result.get("json", {})
+                                    if "sql" in result_data:
+                                        sql += " " + result_data.get("sql", "")
     except Exception as e:
         st.error(f"❌ Error Processing Response: {str(e)}")
     return sql.strip()
 
-# Main application
+# --------------------------
+# Main app
+# --------------------------
 def main():
     st.sidebar.header("🔍 Cortex Assistant")
 
-    if 'messages' not in st.session_state:
+    if "messages" not in st.session_state:
         st.session_state.messages = []
 
     query = st.chat_input("Ask your question...")

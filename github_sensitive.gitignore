@@ -1,3 +1,4 @@
-.env
-__pycache__/
-*.pyc
+# Ignore local secrets
+.streamlit/secrets.toml
+C:/Users/MohanGandi/Desktop/Python/SECRETS.env
+SECRETS.env
