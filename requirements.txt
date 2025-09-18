@@ -3,4 +3,3 @@ snowflake-connector-python
 python-dotenv
 pandas
 requests
-snowflake.connector
