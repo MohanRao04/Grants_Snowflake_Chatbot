@@ -24,15 +24,18 @@ st.markdown("""
 
 # Connect using snowflake-connector-python
 try:
+    st.write("DEBUG: Snowflake USER:", st.secrets["snowflake"].get("USER"))
+    st.write("DEBUG: Snowflake ACCOUNT:", st.secrets["snowflake"].get("ACCOUNT"))
+
     conn = snowflake.connector.connect(
-        user=os.getenv("SNOWFLAKE_USER"),
-        password=os.getenv("SNOWFLAKE_PASSWORD"),
-        account=os.getenv("SNOWFLAKE_ACCOUNT"),
-        role=os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
-        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
-        database=os.getenv("SNOWFLAKE_DATABASE"),
-        schema=os.getenv("SNOWFLAKE_SCHEMA")
-    )
+        user=st.secrets["snowflake"]["USER"],
+        password=st.secrets["snowflake"]["PASSWORD"],
+        account=st.secrets["snowflake"]["ACCOUNT"],
+        role=st.secrets["snowflake"]["ROLE"],
+        warehouse=st.secrets["snowflake"]["WAREHOUSE"],
+        database=st.secrets["snowflake"]["DATABASE"],
+        schema=st.secrets["snowflake"]["SCHEMA"]
+)
     st.info("✅ Connected to Snowflake using snowflake-connector-python")
 except Exception as e:
     st.error(f"❌ Connection failed: {str(e)}")
