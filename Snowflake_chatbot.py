@@ -1,13 +1,13 @@
 # Trigger redeploy
+
 import streamlit as st
 import json
-import requests
 import pandas as pd
 import snowflake.connector
 
-# --------------------------
+# -------------------------------------------------
 # Streamlit config
-# --------------------------
+# -------------------------------------------------
 st.set_page_config(page_title="Cortex AI Assistant", layout="wide")
 st.title("🤖 Cortex AI Assistant")
 
@@ -17,9 +17,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --------------------------
-# Load secrets (Streamlit Cloud)
-# --------------------------
+# -------------------------------------------------
+# Load secrets
+# -------------------------------------------------
 try:
     SNOWFLAKE_USER = st.secrets["snowflake"]["USER"]
     SNOWFLAKE_PASSWORD = st.secrets["snowflake"]["PASSWORD"]
@@ -29,8 +29,6 @@ try:
     SNOWFLAKE_DATABASE = st.secrets["snowflake"]["DATABASE"]
     SNOWFLAKE_SCHEMA = st.secrets["snowflake"]["SCHEMA"]
 
-    API_ENDPOINT = st.secrets["cortex"]["API_ENDPOINT"]
-    API_TIMEOUT = int(st.secrets["cortex"].get("API_TIMEOUT", 50000))
     SEMANTIC_MODEL = st.secrets["cortex"].get(
         "SEMANTIC_MODEL",
         '@"GRANTS"."GS"."GSTAGE"/GRANTS_CHATBOT.yaml'
@@ -38,14 +36,13 @@ try:
 
     st.write("DEBUG: Snowflake USER:", SNOWFLAKE_USER)
     st.write("DEBUG: Snowflake ACCOUNT:", SNOWFLAKE_ACCOUNT)
-
-except Exception:
-    st.error("❌ Missing secrets in Streamlit Cloud (Settings → Secrets).")
+except Exception as e:
+    st.error("❌ Missing secrets in .streamlit/secrets.toml")
     st.stop()
 
-# --------------------------
+# -------------------------------------------------
 # Connect to Snowflake
-# --------------------------
+# -------------------------------------------------
 try:
     conn = snowflake.connector.connect(
         user=SNOWFLAKE_USER,
@@ -61,9 +58,9 @@ except Exception as e:
     st.error(f"❌ Connection failed: {str(e)}")
     conn = None
 
-# --------------------------
+# -------------------------------------------------
 # Run SQL query
-# --------------------------
+# -------------------------------------------------
 def run_snowflake_query(query):
     if not conn:
         st.error("❌ No active connection.")
@@ -81,9 +78,9 @@ def run_snowflake_query(query):
         st.error(f"❌ SQL Execution Error: {str(e)}")
         return None
 
-# --------------------------
+# -------------------------------------------------
 # COMPLETE fallback
-# --------------------------
+# -------------------------------------------------
 def complete(prompt, model="mistral-large"):
     if not conn:
         st.error("❌ No active connection.")
@@ -102,88 +99,35 @@ def complete(prompt, model="mistral-large"):
         st.error(f"❌ COMPLETE Function Error: {str(e)}")
         return None
 
-# --------------------------
-# Cortex API Call
-# --------------------------
-def snowflake_api_call(query, semantic_model=SEMANTIC_MODEL):
+# -------------------------------------------------
+# ANALYZE (Cortex Analyst) to generate SQL
+# -------------------------------------------------
+def generate_sql_from_cortex(query):
     if not conn:
         st.error("❌ No active connection.")
         return None
     try:
         cur = conn.cursor()
-        cur.execute("SELECT CURRENT_SESSION()")
-        session_id = cur.fetchone()[0]
+        prompt_escaped = query.replace("'", "''")
+        cortex_query = f"""
+            SELECT SNOWFLAKE.CORTEX.ANALYZE(
+                '{SEMANTIC_MODEL}',
+                '{prompt_escaped}'
+            ) AS sql_query
+        """
+        cur.execute(cortex_query)
+        row = cur.fetchone()
         cur.close()
-
-        st.info(f"✅ Session ID: {session_id}")
-
-        # Build Cortex API URL correctly
-        url = f"https://{SNOWFLAKE_ACCOUNT}.snowflakecomputing.com{API_ENDPOINT}"
-        headers = {
-            "Authorization": f"Bearer {SNOWFLAKE_PASSWORD}",  # ⚠️ Placeholder, update with real auth
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "mistral-large",
-            "temperature": 0.0,
-            "messages": [{"role": "user", "content": query}],
-            "tools": [
-                {
-                    "type": "cortex_analyst_text_to_sql",
-                    "name": "analyst1",
-                    "semantic_model": semantic_model
-                }
-            ],
-            "max_tokens": 500,
-            "stream": True
-        }
-
-        st.write("Request URL:", url)
-        st.json(payload)
-
-        response = requests.post(url, headers=headers, json=payload, timeout=API_TIMEOUT / 1000)
-        response.raise_for_status()
-
-        events = []
-        for line in response.iter_lines():
-            if line:
-                line = line.decode("utf-8").strip()
-                if line.startswith("data:"):
-                    data = json.loads(line[5:])
-                    events.append(data)
-        return events
+        if row and row[0]:
+            return row[0]
+        return None
     except Exception as e:
-        st.error(f"❌ API Request Failed: {str(e)}")
+        st.error(f"❌ Cortex Analyst SQL generation failed: {str(e)}")
         return None
 
-# --------------------------
-# Process Cortex response
-# --------------------------
-def process_sse_response(response):
-    sql = ""
-    if not response:
-        return sql
-    try:
-        for event in response:
-            if isinstance(event, dict) and event.get("event") == "message.delta":
-                data = event.get("data", {})
-                delta = data.get("delta", {})
-                for content_item in delta.get("content", []):
-                    if content_item.get("type") == "tool_results":
-                        tool_results = content_item.get("tool_results", {})
-                        if "content" in tool_results:
-                            for result in tool_results["content"]:
-                                if result.get("type") == "json":
-                                    result_data = result.get("json", {})
-                                    if "sql" in result_data:
-                                        sql += " " + result_data.get("sql", "")
-    except Exception as e:
-        st.error(f"❌ Error Processing Response: {str(e)}")
-    return sql.strip()
-
-# --------------------------
+# -------------------------------------------------
 # Main app
-# --------------------------
+# -------------------------------------------------
 def main():
     st.sidebar.header("🔍 Cortex Assistant")
 
@@ -195,8 +139,7 @@ def main():
     if query:
         st.markdown(f"**You asked:** {query}")
         with st.spinner("Fetching data... 🤖"):
-            response = snowflake_api_call(query)
-            sql = process_sse_response(response)
+            sql = generate_sql_from_cortex(query)
 
             if sql:
                 results = run_snowflake_query(sql)
