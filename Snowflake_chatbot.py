@@ -1,13 +1,13 @@
 # Trigger redeploy
-
 import streamlit as st
 import json
-import os
 import requests
 import pandas as pd
 import snowflake.connector
 
+# --------------------------
 # Streamlit config
+# --------------------------
 st.set_page_config(page_title="Cortex AI Assistant", layout="wide")
 st.title("🤖 Cortex AI Assistant")
 
@@ -18,7 +18,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --------------------------
-# Load secrets
+# Load secrets (Streamlit Cloud)
 # --------------------------
 try:
     SNOWFLAKE_USER = st.secrets["snowflake"]["USER"]
@@ -38,8 +38,9 @@ try:
 
     st.write("DEBUG: Snowflake USER:", SNOWFLAKE_USER)
     st.write("DEBUG: Snowflake ACCOUNT:", SNOWFLAKE_ACCOUNT)
-except Exception as e:
-    st.error("❌ Missing secrets in .streamlit/secrets.toml")
+
+except Exception:
+    st.error("❌ Missing secrets in Streamlit Cloud (Settings → Secrets).")
     st.stop()
 
 # --------------------------
@@ -119,7 +120,7 @@ def snowflake_api_call(query, semantic_model=SEMANTIC_MODEL):
         # Build Cortex API URL correctly
         url = f"https://{SNOWFLAKE_ACCOUNT}.snowflakecomputing.com{API_ENDPOINT}"
         headers = {
-            "Authorization": f"Bearer {SNOWFLAKE_PASSWORD}",  # ⚠️ Replace with correct auth
+            "Authorization": f"Bearer {SNOWFLAKE_PASSWORD}",  # ⚠️ Placeholder, update with real auth
             "Content-Type": "application/json"
         }
         payload = {
