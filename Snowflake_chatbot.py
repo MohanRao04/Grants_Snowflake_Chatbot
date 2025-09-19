@@ -102,7 +102,7 @@ def complete_text(prompt: str, model="mistral-large"):
 # -------------------------
 def generate_sql_from_cortex(user_query: str):
     """
-    Uses SNOWFLAKE.CORTEX.COMPLETE_ANALYST with a semantic model.
+    Uses SNOWFLAKE.CORTEX.COMPLETE with a text-to-SQL tool + semantic model.
     Returns generated SQL string or None.
     """
     if not conn:
@@ -114,14 +114,24 @@ def generate_sql_from_cortex(user_query: str):
         safe_model = SEMANTIC_MODEL_FILE.replace("'", "''")
 
         cortex_call_sql = f"""
-        SELECT SNOWFLAKE.CORTEX.COMPLETE_ANALYST(
+        SELECT SNOWFLAKE.CORTEX.COMPLETE(
           'mistral-large',
-          '{safe_model}',
-          '{safe_query}'
+          ARRAY_CONSTRUCT(
+            OBJECT_CONSTRUCT('role','user','content','{safe_query}')
+          ),
+          OBJECT_CONSTRUCT(
+            'tools', ARRAY_CONSTRUCT(
+              OBJECT_CONSTRUCT(
+                'type','cortex_analyst_text_to_sql',
+                'semantic_model_file','{safe_model}'
+              )
+            ),
+            'temperature', 0
+          )
         ) AS response
         """
 
-        st.write("DEBUG: Executing Cortex COMPLETE_ANALYST call.")
+        st.write("DEBUG: Executing Cortex COMPLETE call with tools.")
         st.code(cortex_call_sql, language="sql")
 
         cur = conn.cursor()
@@ -133,9 +143,25 @@ def generate_sql_from_cortex(user_query: str):
             st.warning("⚠️ Cortex returned empty response.")
             return None
 
-        # COMPLETE_ANALYST returns SQL directly as plain text
-        sql_text = row[0].strip()
-        return sql_text
+        # Cortex COMPLETE returns JSON when tools are used
+        response_obj = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        st.write("DEBUG: Cortex response object:")
+        st.json(response_obj)
+
+        # Extract SQL from tool_calls
+        tool_calls = response_obj.get("tool_calls", [])
+        if tool_calls:
+            args = tool_calls[0].get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    args = {}
+            sql_text = args.get("sql_text") or args.get("sql") or args.get("query")
+            if sql_text:
+                return sql_text.strip()
+
+        return None
 
     except Exception as e:
         st.error("❌ Cortex text-to-SQL generation failed: " + str(e))
