@@ -3,7 +3,6 @@
 import streamlit as st
 import json
 import pandas as pd
-import requests
 import snowflake.connector
 
 # -------------------------------------------------
@@ -12,6 +11,7 @@ import snowflake.connector
 st.set_page_config(page_title="Cortex AI Assistant", layout="wide")
 st.title("🤖 Cortex AI Assistant")
 
+# Hide Streamlit's default menu/footer
 st.markdown("""
 <style>
 #MainMenu, header, footer {visibility: hidden;}
@@ -19,7 +19,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# Load secrets
+# Load secrets for Snowflake connection
 # -------------------------------------------------
 try:
     SNOWFLAKE_USER = st.secrets["snowflake"]["USER"]
@@ -30,8 +30,9 @@ try:
     SNOWFLAKE_DATABASE = st.secrets["snowflake"]["DATABASE"]
     SNOWFLAKE_SCHEMA = st.secrets["snowflake"]["SCHEMA"]
 
-    SEMANTIC_MODEL = st.secrets["cortex"].get(
-        "SEMANTIC_MODEL",
+    # Semantic model on a Snowflake stage (path to the YAML file)
+    SEMANTIC_MODEL_FILE = st.secrets["cortex"].get(
+        "SEMANTIC_MODEL_FILE",
         '@"GRANTS"."GS"."GSTAGE"/GRANTS_CHATBOT.yaml'
     )
 
@@ -42,7 +43,7 @@ except Exception as e:
     st.stop()
 
 # -------------------------------------------------
-# Connect to Snowflake (for query execution only)
+# Connect to Snowflake using Python Connector
 # -------------------------------------------------
 try:
     conn = snowflake.connector.connect(
@@ -60,11 +61,11 @@ except Exception as e:
     conn = None
 
 # -------------------------------------------------
-# Run SQL query in Snowflake
+# Helper to run a query and return a DataFrame
 # -------------------------------------------------
 def run_snowflake_query(query):
     if not conn:
-        st.error("❌ No active connection.")
+        st.error("❌ No active Snowflake connection.")
         return None
     try:
         cur = conn.cursor()
@@ -73,109 +74,103 @@ def run_snowflake_query(query):
         columns = [desc[0] for desc in cur.description]
         cur.close()
         if not rows:
-            return None
+            return pd.DataFrame(columns=columns)  # return empty DF if no rows
         return pd.DataFrame(rows, columns=columns)
     except Exception as e:
         st.error(f"❌ SQL Execution Error: {str(e)}")
         return None
 
 # -------------------------------------------------
-# Cortex REST API call (replaces ANALYZE)
+# Call SNOWFLAKE.CORTEX.COMPLETE to generate SQL
 # -------------------------------------------------
-def generate_sql_from_cortex(user_query):
+def generate_sql_from_cortex(user_query: str) -> str:
     if not conn:
-        st.error("❌ No active connection.")
+        st.error("❌ No active Snowflake connection.")
         return None
     try:
-        cur = conn.cursor()
+        # Escape single quotes in user query
+        safe_query = user_query.replace("'", "''")
         cortex_sql = f"""
         SELECT SNOWFLAKE.CORTEX.COMPLETE(
           'mistral-large',
           OBJECT_CONSTRUCT(
             'messages', ARRAY_CONSTRUCT(
-              OBJECT_CONSTRUCT('role','user','content','{user_query}')
+              OBJECT_CONSTRUCT('role','user','content','{safe_query}')
             ),
             'tools', ARRAY_CONSTRUCT(
               OBJECT_CONSTRUCT(
                 'type','cortex_analyst_text_to_sql',
                 'name','analyst1',
                 'parameters', OBJECT_CONSTRUCT(
-                    'semantic_model','{SEMANTIC_MODEL}'
+                    'semantic_model_file','{SEMANTIC_MODEL_FILE}'
                 )
               )
             ),
             'temperature', 0
           )
-        ) AS response
+        ) AS response;
         """
+        cur = conn.cursor()
         cur.execute(cortex_sql)
         row = cur.fetchone()
         cur.close()
 
         if row and row[0]:
-            import json
             response = json.loads(row[0])
-
+            # Expecting tool_calls in the JSON response
             if "tool_calls" in response and len(response["tool_calls"]) > 0:
-                # Cortex returns SQL under arguments -> sql
                 tool_call = response["tool_calls"][0]
                 args = tool_call.get("arguments", {})
                 return args.get("sql", None)
         return None
     except Exception as e:
-        st.error(f"❌ Cortex Analyst SQL generation failed: {str(e)}")
+        st.error(f"❌ Cortex text-to-SQL generation failed: {str(e)}")
         return None
 
-
-
-
 # -------------------------------------------------
-# COMPLETE fallback
+# Fallback: simple completion if text-to-SQL fails
 # -------------------------------------------------
-def complete(prompt, model="mistral-large"):
+def complete_text(prompt: str, model="mistral-large") -> str:
+    if not conn:
+        st.error("❌ No active Snowflake connection.")
+        return None
     try:
+        safe_prompt = prompt.replace("'", "''")
+        query = f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{model}', '{safe_prompt}') AS response;"
         cur = conn.cursor()
-        prompt_escaped = prompt.replace("'", "''")
-        query = f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{model}', '{prompt_escaped}') AS response"
         cur.execute(query)
-        result = cur.fetchone()
+        row = cur.fetchone()
         cur.close()
-        if result:
-            return result[0]
-        return None
+        return row[0] if row else None
     except Exception as e:
-        st.error(f"❌ COMPLETE Function Error: {str(e)}")
+        st.error(f"❌ COMPLETE function error: {str(e)}")
         return None
 
 # -------------------------------------------------
-# Main app
+# Main Streamlit app
 # -------------------------------------------------
 def main():
     st.sidebar.header("🔍 Cortex Assistant")
-
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    query = st.chat_input("Ask your question...")
-
-    if query:
-        st.markdown(f"**You asked:** {query}")
-        with st.spinner("Fetching data... 🤖"):
-            sql = generate_sql_from_cortex(query)
-
+    user_question = st.chat_input("Ask your question...")
+    if user_question:
+        st.markdown(f"**You asked:** {user_question}")
+        with st.spinner("Generating SQL via Cortex... 🤖"):
+            sql = generate_sql_from_cortex(user_question)
             if sql:
                 results = run_snowflake_query(sql)
-                st.markdown("### 🛠️ Generated SQL Query:")
+                st.markdown("### 🛠️ Generated SQL:")
                 st.code(sql, language="sql")
-                st.markdown("### 📊 Summary of Query Results:")
-                st.write("The SQL query retrieves data based on the input question.")
+                st.markdown("### 📊 Query Results:")
                 if results is not None and not results.empty:
-                    st.markdown("### 📈 Query Results:")
                     st.dataframe(results)
                 else:
-                    st.warning("⚠️ No data found.")
+                    st.warning("⚠️ Query returned no data.")
             else:
-                response_text = complete(query)
+                # If no SQL was generated, do a normal text completion
+                response_text = complete_text(user_question)
                 if response_text:
                     st.markdown("### ✍️ Generated Response:")
                     st.write(response_text)
