@@ -83,50 +83,38 @@ def run_snowflake_query(query):
 # Cortex REST API call (replaces ANALYZE)
 # -------------------------------------------------
 def generate_sql_from_cortex(user_query):
+    if not conn:
+        st.error("❌ No active connection.")
+        return None
     try:
-        url = f"https://{SNOWFLAKE_ACCOUNT}.snowflakecomputing.com/api/v2/cortex/chat/completions"
+        cur = conn.cursor()
+        cortex_sql = f"""
+        SELECT SNOWFLAKE.CORTEX.COMPLETE(
+            'mistral-large',
+            PARSE_JSON($$
+              [{{"role":"user","content":"{user_query}"}}]
+            $$),
+            OBJECT_CONSTRUCT(
+              'tools', ARRAY_CONSTRUCT(
+                OBJECT_CONSTRUCT(
+                  'type','cortex_analyst_text_to_sql',
+                  'semantic_model','{SEMANTIC_MODEL}'
+                )
+              )
+            )
+        ) AS response
+        """
+        cur.execute(cortex_sql)
+        row = cur.fetchone()
+        cur.close()
 
-        payload = {
-            "model": "mistral-large",
-            "temperature": 0,
-            "messages": [{"role": "user", "content": user_query}],
-            "tools": [
-                {
-                    "type": "cortex_analyst_text_to_sql",
-                    "name": "analyst1",
-                    "semantic_model": SEMANTIC_MODEL
-                }
-            ],
-            "max_tokens": 500,
-            "stream": False
-        }
+        if row and row[0]:
+            import json
+            response = json.loads(row[0])
 
-        resp = requests.post(url, json=payload, auth=(SNOWFLAKE_USER, SNOWFLAKE_PASSWORD))
-
-        if resp.status_code != 200:
-            st.error(f"❌ Cortex API Request Failed: {resp.text}")
-            return None
-
-        data = resp.json()
-        st.json(data)  # Debugging
-
-        # Try to extract SQL from the response
-        sql = ""
-        try:
-            choices = data.get("choices", [])
-            for choice in choices:
-                msg = choice.get("message", {})
-                if "tool_calls" in msg:
-                    for tool in msg["tool_calls"]:
-                        if "arguments" in tool:
-                            args = json.loads(tool["arguments"])
-                            if "sql" in args:
-                                sql = args["sql"]
-        except Exception as e:
-            st.warning(f"⚠️ Could not parse SQL: {str(e)}")
-
-        return sql if sql else None
-
+            if "tool_calls" in response and len(response["tool_calls"]) > 0:
+                return response["tool_calls"][0].get("sql_text")
+        return None
     except Exception as e:
         st.error(f"❌ Cortex Analyst SQL generation failed: {str(e)}")
         return None
