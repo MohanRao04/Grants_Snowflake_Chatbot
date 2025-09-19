@@ -1,4 +1,4 @@
-# Snowflake_chatbot.py (updated)
+# Snowflake_chatbot.py (fixed)
 import streamlit as st
 import json
 import pandas as pd
@@ -43,7 +43,6 @@ except Exception:
 # Connect to Snowflake
 # -------------------------
 try:
-    # Use cache_resource to reuse connection on Streamlit Cloud
     @st.cache_resource
     def get_conn():
         return snowflake.connector.connect(
@@ -82,6 +81,7 @@ def run_snowflake_query(query: str):
         return None
 
 def complete_text(prompt: str, model="mistral-large"):
+    """Fallback: plain text completion (not SQL)"""
     if not conn:
         st.error("❌ No active connection.")
         return None
@@ -98,13 +98,11 @@ def complete_text(prompt: str, model="mistral-large"):
         return None
 
 # -------------------------
-# Correct generate_sql_from_cortex (uses COMPLETE(VARCHAR, ARRAY, OBJECT) signature)
+# Correct generate_sql_from_cortex (uses COMPLETE_ANALYST)
 # -------------------------
 def generate_sql_from_cortex(user_query: str):
     """
-    Uses SNOWFLAKE.CORTEX.COMPLETE(model, messages_array, options_object)
-    - messages_array: ARRAY_CONSTRUCT(OBJECT_CONSTRUCT('role','user','content', ...))
-    - options_object: OBJECT_CONSTRUCT('tools', ARRAY_CONSTRUCT( OBJECT_CONSTRUCT(...tool spec...) ), 'temperature', 0 )
+    Uses SNOWFLAKE.CORTEX.COMPLETE_ANALYST with a semantic model.
     Returns generated SQL string or None.
     """
     if not conn:
@@ -112,34 +110,19 @@ def generate_sql_from_cortex(user_query: str):
         return None
 
     try:
-        # escape single quotes
         safe_query = user_query.replace("'", "''")
         safe_model = SEMANTIC_MODEL_FILE.replace("'", "''")
 
-        # Build the SQL invocation using the ARRAY + OBJECT signature (correct shape)
         cortex_call_sql = f"""
-        SELECT SNOWFLAKE.CORTEX.COMPLETE(
+        SELECT SNOWFLAKE.CORTEX.COMPLETE_ANALYST(
           'mistral-large',
-          ARRAY_CONSTRUCT(
-            OBJECT_CONSTRUCT('role','user','content','{safe_query}')
-          ),
-          OBJECT_CONSTRUCT(
-            'tools', ARRAY_CONSTRUCT(
-              OBJECT_CONSTRUCT(
-                'type','cortex_analyst_text_to_sql',
-                'name','analyst1',
-                'semantic_model_file','{safe_model}'
-              )
-            ),
-            'temperature', 0
-          )
+          '{safe_model}',
+          '{safe_query}'
         ) AS response
         """
 
-        # debug: show generated request SQL in Streamlit logs (not in production)
-        st.debug = getattr(st, "debug", None)
-        st.write("DEBUG: Executing Cortex COMPLETE call (server side).")
-        st.code(cortex_call_sql)
+        st.write("DEBUG: Executing Cortex COMPLETE_ANALYST call.")
+        st.code(cortex_call_sql, language="sql")
 
         cur = conn.cursor()
         cur.execute(cortex_call_sql)
@@ -150,60 +133,12 @@ def generate_sql_from_cortex(user_query: str):
             st.warning("⚠️ Cortex returned empty response.")
             return None
 
-        # row[0] is expected to be a JSON string (object) when using this signature
-        try:
-            response_obj = json.loads(row[0])
-        except Exception:
-            # If it's already a dict, accept it
-            if isinstance(row[0], dict):
-                response_obj = row[0]
-            else:
-                st.warning("⚠️ Could not parse Cortex response JSON.")
-                return None
-
-        # debug: show full response
-        st.write("DEBUG: Cortex response object:")
-        st.json(response_obj)
-
-        # Look for tool_calls -> arguments -> sql (common place where text-to-sql tool puts SQL)
-        tool_calls = response_obj.get("tool_calls") or response_obj.get("tool_calls", [])
-        if tool_calls and len(tool_calls) > 0:
-            first_tool = tool_calls[0]
-            # arguments sometimes embedded as string or as object
-            args = first_tool.get("arguments") or {}
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except Exception:
-                    args = {}
-            # try common keys where SQL may be present
-            sql_text = args.get("sql") or args.get("sql_text") or args.get("query") or None
-            if sql_text:
-                return sql_text
-
-        # if no tool_calls sql found, attempt to find plain assistant content containing SQL
-        choices = response_obj.get("choices") or []
-        for c in choices:
-            msg = c.get("message") or {}
-            content = msg.get("content") or ""
-            # naive extraction — look for triple-backtick SQL blocks
-            if "```sql" in content or "```" in content:
-                # try to extract code fences
-                parts = content.split("```")
-                for p in parts:
-                    if p.lower().strip().startswith("sql") or p.strip().startswith("select ") or p.strip().lower().startswith("with "):
-                        # remove optional leading 'sql' label
-                        cleaned = p.split("\n",1)[1] if p.lower().startswith("sql") else p
-                        return cleaned.strip()
-            # fallback: if content contains obvious SQL keywords, return content
-            if "select " in content.lower() or "from " in content.lower():
-                return content.strip()
-
-        return None
+        # COMPLETE_ANALYST returns SQL directly as plain text
+        sql_text = row[0].strip()
+        return sql_text
 
     except Exception as e:
         st.error("❌ Cortex text-to-SQL generation failed: " + str(e))
-        # provide traceback in logs for debugging
         st.text(traceback.format_exc())
         return None
 
