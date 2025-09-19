@@ -3,6 +3,7 @@
 import streamlit as st
 import json
 import pandas as pd
+import requests
 import snowflake.connector
 
 # -------------------------------------------------
@@ -41,7 +42,7 @@ except Exception as e:
     st.stop()
 
 # -------------------------------------------------
-# Connect to Snowflake
+# Connect to Snowflake (for query execution only)
 # -------------------------------------------------
 try:
     conn = snowflake.connector.connect(
@@ -59,7 +60,7 @@ except Exception as e:
     conn = None
 
 # -------------------------------------------------
-# Run SQL query
+# Run SQL query in Snowflake
 # -------------------------------------------------
 def run_snowflake_query(query):
     if not conn:
@@ -79,12 +80,61 @@ def run_snowflake_query(query):
         return None
 
 # -------------------------------------------------
+# Cortex REST API call (replaces ANALYZE)
+# -------------------------------------------------
+def generate_sql_from_cortex(user_query):
+    try:
+        url = f"https://{SNOWFLAKE_ACCOUNT}.snowflakecomputing.com/api/v2/cortex/chat/completions"
+
+        payload = {
+            "model": "mistral-large",
+            "temperature": 0,
+            "messages": [{"role": "user", "content": user_query}],
+            "tools": [
+                {
+                    "type": "cortex_analyst_text_to_sql",
+                    "name": "analyst1",
+                    "semantic_model": SEMANTIC_MODEL
+                }
+            ],
+            "max_tokens": 500,
+            "stream": False
+        }
+
+        resp = requests.post(url, json=payload, auth=(SNOWFLAKE_USER, SNOWFLAKE_PASSWORD))
+
+        if resp.status_code != 200:
+            st.error(f"❌ Cortex API Request Failed: {resp.text}")
+            return None
+
+        data = resp.json()
+        st.json(data)  # Debugging
+
+        # Try to extract SQL from the response
+        sql = ""
+        try:
+            choices = data.get("choices", [])
+            for choice in choices:
+                msg = choice.get("message", {})
+                if "tool_calls" in msg:
+                    for tool in msg["tool_calls"]:
+                        if "arguments" in tool:
+                            args = json.loads(tool["arguments"])
+                            if "sql" in args:
+                                sql = args["sql"]
+        except Exception as e:
+            st.warning(f"⚠️ Could not parse SQL: {str(e)}")
+
+        return sql if sql else None
+
+    except Exception as e:
+        st.error(f"❌ Cortex Analyst SQL generation failed: {str(e)}")
+        return None
+
+# -------------------------------------------------
 # COMPLETE fallback
 # -------------------------------------------------
 def complete(prompt, model="mistral-large"):
-    if not conn:
-        st.error("❌ No active connection.")
-        return None
     try:
         cur = conn.cursor()
         prompt_escaped = prompt.replace("'", "''")
@@ -97,32 +147,6 @@ def complete(prompt, model="mistral-large"):
         return None
     except Exception as e:
         st.error(f"❌ COMPLETE Function Error: {str(e)}")
-        return None
-
-# -------------------------------------------------
-# ANALYZE (Cortex Analyst) to generate SQL
-# -------------------------------------------------
-def generate_sql_from_cortex(query):
-    if not conn:
-        st.error("❌ No active connection.")
-        return None
-    try:
-        cur = conn.cursor()
-        prompt_escaped = query.replace("'", "''")
-        cortex_query = f"""
-            SELECT SNOWFLAKE.CORTEX.ANALYZE(
-                '{SEMANTIC_MODEL}',
-                '{prompt_escaped}'
-            ) AS sql_query
-        """
-        cur.execute(cortex_query)
-        row = cur.fetchone()
-        cur.close()
-        if row and row[0]:
-            return row[0]
-        return None
-    except Exception as e:
-        st.error(f"❌ Cortex Analyst SQL generation failed: {str(e)}")
         return None
 
 # -------------------------------------------------
