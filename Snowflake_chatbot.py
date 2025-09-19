@@ -90,20 +90,20 @@ def generate_sql_from_cortex(user_query):
         cur = conn.cursor()
         cortex_sql = f"""
         SELECT SNOWFLAKE.CORTEX.COMPLETE(
-            'mistral-large',
-            PARSE_JSON($$
-              [{{"role":"user","content":"{user_query}"}}]
-            $$),
-            OBJECT_CONSTRUCT_KEEP_NULL(
-              'tools',
-              ARRAY_CONSTRUCT(
-                OBJECT_CONSTRUCT_KEEP_NULL(
-                  'type','cortex_analyst_text_to_sql',
-                  'name','analyst1',
-                  'semantic_model','{SEMANTIC_MODEL}'
-                )
+          'mistral-large',
+          OBJECT_CONSTRUCT(
+            'messages', ARRAY_CONSTRUCT(
+              OBJECT_CONSTRUCT('role','user','content','{user_query}')
+            ),
+            'tools', ARRAY_CONSTRUCT(
+              OBJECT_CONSTRUCT(
+                'type','cortex_analyst_text_to_sql',
+                'name','analyst1',
+                'semantic_model','{SEMANTIC_MODEL}'
               )
-            )
+            ),
+            'temperature',0
+          )
         ) AS response
         """
         cur.execute(cortex_sql)
@@ -115,12 +115,12 @@ def generate_sql_from_cortex(user_query):
             response = json.loads(row[0])
 
             if "tool_calls" in response and len(response["tool_calls"]) > 0:
-                # Extract generated SQL from Cortex Analyst
                 return response["tool_calls"][0].get("sql_text")
         return None
     except Exception as e:
         st.error(f"❌ Cortex Analyst SQL generation failed: {str(e)}")
         return None
+
 
 
 # -------------------------------------------------
