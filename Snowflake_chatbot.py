@@ -99,10 +99,12 @@ def generate_sql_from_cortex(user_query):
               OBJECT_CONSTRUCT(
                 'type','cortex_analyst_text_to_sql',
                 'name','analyst1',
-                'semantic_model','{SEMANTIC_MODEL}'
+                'parameters', OBJECT_CONSTRUCT(
+                    'semantic_model','{SEMANTIC_MODEL}'
+                )
               )
             ),
-            'temperature',0
+            'temperature', 0
           )
         ) AS response
         """
@@ -115,11 +117,15 @@ def generate_sql_from_cortex(user_query):
             response = json.loads(row[0])
 
             if "tool_calls" in response and len(response["tool_calls"]) > 0:
-                return response["tool_calls"][0].get("sql_text")
+                # Cortex returns SQL under arguments -> sql
+                tool_call = response["tool_calls"][0]
+                args = tool_call.get("arguments", {})
+                return args.get("sql", None)
         return None
     except Exception as e:
         st.error(f"❌ Cortex Analyst SQL generation failed: {str(e)}")
         return None
+
 
 
 
