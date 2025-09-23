@@ -30,11 +30,11 @@ SEMANTIC_MODEL = st.secrets["cortex"]["SEMANTIC_MODEL"]
 API_TIMEOUT = int(st.secrets["cortex"]["API_TIMEOUT"])  # Not used in requests, but keeping for reference
 
 # ---------------------------
-# Connect to Snowflake
+# Connect to Snowflake (ensure your role has SNOWFLAKE.CORTEX_USER granted if needed)
 # ---------------------------
 @st.cache_resource
 def init_connection():
-    return snowflake.connector.connect(
+    conn = snowflake.connector.connect(
         user=USER,
         password=PASSWORD,
         account=ACCOUNT,
@@ -43,6 +43,11 @@ def init_connection():
         database=DATABASE,
         schema=SCHEMA
     )
+    # Optional: Grant CORTEX_USER if not already (run once in Snowflake)
+    # with conn.cursor() as cur:
+    #     cur.execute("USE ROLE ACCOUNTADMIN;")
+    #     cur.execute("GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE ACCOUNTADMIN;")
+    return conn
 
 conn = init_connection()
 
@@ -55,20 +60,31 @@ if "messages" not in st.session_state:
     ]
 
 # ---------------------------
-# Function to Query Cortex Analyst via API
+# Function to Query Cortex Analyst via API (send only current question)
 # ---------------------------
-def ask_cortex(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+def ask_cortex(question: str) -> Dict[str, Any]:
     host = f"{ACCOUNT}.snowflakecomputing.com"
     url = f"https://{host}/api/v2/cortex/analyst/message"
     token = conn.rest.token  # Session token from connector for auth
 
     headers = {
-        "Authorization": f'Snowflake Token="{token}"',
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {token}",  # Standard Bearer format for Cortex API
+        "Content-Type": "application/json",
+        "Accept": "application/json"
     }
 
     body = {
-        "messages": messages,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": question
+                    }
+                ]
+            }
+        ],
         "semantic_model_file": SEMANTIC_MODEL
     }
 
@@ -77,8 +93,9 @@ def ask_cortex(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.RequestException as e:
-        st.error(f"API Error: {e}")
-        return {"error": str(e)}
+        error_details = e.response.text if e.response else str(e)  # Capture full error body
+        st.error(f"API Error: {e} - Details: {error_details}")
+        return {"error": str(e), "details": error_details}
 
 # ---------------------------
 # Function to Execute Generated SQL
@@ -113,18 +130,18 @@ for msg in st.session_state["messages"]:
 # Chat Input Box
 # ---------------------------
 if prompt := st.chat_input("Type your question here..."):
-    # Add user message to history
+    # Add user message
     user_msg = {"role": "user", "content": [{"type": "text", "text": prompt}]}
     st.session_state["messages"].append(user_msg)
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Query Cortex Analyst with full history
-    api_response = ask_cortex(st.session_state["messages"])
+    # Query Cortex Analyst with only the current prompt
+    api_response = ask_cortex(prompt)
 
     if "error" not in api_response:
-        # Extract analyst response (assumes single message response)
-        analyst_msg = api_response.get("messages", [{}])[0]
+        # Extract analyst response
+        analyst_msg = api_response.get("message", {})  # Note: docs use singular "message" in response
         content = analyst_msg.get("content", [])
 
         # Parse content parts
@@ -161,9 +178,10 @@ if prompt := st.chat_input("Type your question here..."):
                     st.markdown("**Query Results:**")
                     st.dataframe(part["df"])
     else:
-        st.session_state["messages"].append({"role": "assistant", "content": [{"type": "text", "text": api_response["error"]}]})
+        error_msg = api_response.get("details", api_response["error"])
+        st.session_state["messages"].append({"role": "assistant", "content": [{"type": "text", "text": error_msg}]})
         with st.chat_message("assistant"):
-            st.markdown(api_response["error"])
+            st.markdown(error_msg)
 
 # ---------------------------
 # Sidebar
