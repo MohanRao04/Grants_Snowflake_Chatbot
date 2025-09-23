@@ -1,6 +1,9 @@
 import streamlit as st
 import snowflake.connector
 import json
+import requests
+import pandas as pd
+from typing import List, Dict, Any
 
 # ---------------------------
 # Page Config
@@ -24,6 +27,7 @@ WAREHOUSE = st.secrets["snowflake"]["WAREHOUSE"]
 DATABASE = st.secrets["snowflake"]["DATABASE"]
 SCHEMA = st.secrets["snowflake"]["SCHEMA"]
 SEMANTIC_MODEL = st.secrets["cortex"]["SEMANTIC_MODEL"]
+API_TIMEOUT = int(st.secrets["cortex"]["API_TIMEOUT"])  # Not used in requests, but keeping for reference
 
 # ---------------------------
 # Connect to Snowflake
@@ -47,65 +51,119 @@ conn = init_connection()
 # ---------------------------
 if "messages" not in st.session_state:
     st.session_state["messages"] = [
-        {"role": "assistant", "content": "Hello 👋 I’m your Cortex AI Assistant. Ask me anything about your Snowflake data!"}
+        {"role": "assistant", "content": [{"type": "text", "text": "Hello 👋 I’m your Cortex AI Assistant. Ask me anything about your Snowflake data!"}]}
     ]
 
 # ---------------------------
-# Function to Query Cortex Analyst
+# Function to Query Cortex Analyst via API
 # ---------------------------
-def ask_cortex(question: str):
+def ask_cortex(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    host = f"{ACCOUNT}.snowflakecomputing.com"
+    url = f"https://{host}/api/v2/cortex/analyst/message"
+    token = conn.rest.token  # Session token from connector for auth
+
+    headers = {
+        "Authorization": f'Snowflake Token="{token}"',
+        "Content-Type": "application/json"
+    }
+
+    body = {
+        "messages": messages,
+        "semantic_model_file": SEMANTIC_MODEL
+    }
+
+    try:
+        resp = requests.post(url, json=body, headers=headers, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"API Error: {e}")
+        return {"error": str(e)}
+
+# ---------------------------
+# Function to Execute Generated SQL
+# ---------------------------
+def execute_sql(sql: str) -> pd.DataFrame:
     try:
         with conn.cursor() as cur:
-            query = f"""
-            SELECT snowflake.cortex.complete(
-              'mistral-large',
-              OBJECT_CONSTRUCT(
-                'semantic_model', '{SEMANTIC_MODEL}',
-                'question', '{question}'
-              )
-            ) AS response
-            """
-            cur.execute(query)
-            result = cur.fetchone()[0]
-
-            # Parse result safely
-            if isinstance(result, str):
-                result = json.loads(result)
-
-            # Extract Cortex reply
-            reply = result.get("choices", [{}])[0].get("messages", [{}])[0].get("content", "No response")
-            return reply
-
+            cur.execute(sql)
+            results = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+        return pd.DataFrame(results, columns=columns)
     except Exception as e:
-        return f"❌ Error: {e}"
+        st.error(f"SQL Execution Error: {e}")
+        return pd.DataFrame()
 
 # ---------------------------
 # Display Chat Messages
 # ---------------------------
 for msg in st.session_state["messages"]:
-    if msg["role"] == "user":
-        with st.chat_message("user"):
-            st.markdown(msg["content"])
-    else:
-        with st.chat_message("assistant"):
-            st.markdown(msg["content"])
+    role = msg["role"]
+    content = msg["content"]
+    with st.chat_message("user" if role == "user" else "assistant"):
+        for part in content:
+            if part["type"] == "text":
+                st.markdown(part["text"])
+            elif part["type"] == "sql":
+                st.code(part["statement"], language="sql")
+            elif part["type"] == "results":
+                st.dataframe(part["df"])
 
 # ---------------------------
 # Chat Input Box
 # ---------------------------
 if prompt := st.chat_input("Type your question here..."):
-    # Add user message
-    st.session_state["messages"].append({"role": "user", "content": prompt})
+    # Add user message to history
+    user_msg = {"role": "user", "content": [{"type": "text", "text": prompt}]}
+    st.session_state["messages"].append(user_msg)
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Query Cortex Analyst
-    response = ask_cortex(prompt)
+    # Query Cortex Analyst with full history
+    api_response = ask_cortex(st.session_state["messages"])
 
-    # Add assistant message
-    st.session_state["messages"].append({"role": "assistant", "content": response})
-    with st.chat_message("assistant"):
-        st.markdown(response)
+    if "error" not in api_response:
+        # Extract analyst response (assumes single message response)
+        analyst_msg = api_response.get("messages", [{}])[0]
+        content = analyst_msg.get("content", [])
+
+        # Parse content parts
+        summary = next((c["text"] for c in content if c["type"] == "text"), "No summary available.")
+        sql = next((c["statement"] for c in content if c["type"] == "sql"), None)
+
+        # Execute SQL if present
+        results_df = pd.DataFrame()
+        if sql:
+            results_df = execute_sql(sql)
+
+        # Build display content
+        display_content = []
+        if summary:
+            display_content.append({"type": "text", "text": f"**Summary of Query Results:**\n{summary}"})
+        if sql:
+            display_content.append({"type": "sql", "statement": sql})
+        if not results_df.empty:
+            display_content.append({"type": "results", "df": results_df})
+            # Append result to summary for text display
+            display_content[0]["text"] += f"\n\n**Query Results ({len(results_df)} rows):**\n{results_df.to_markdown()}"
+
+        # Add to history and display
+        assistant_msg = {"role": "assistant", "content": display_content}
+        st.session_state["messages"].append(assistant_msg)
+        with st.chat_message("assistant"):
+            for part in display_content:
+                if part["type"] == "text":
+                    st.markdown(part["text"])
+                elif part["type"] == "sql":
+                    st.markdown("**Generated SQL Query:**")
+                    st.code(part["statement"], language="sql")
+                elif part["type"] == "results":
+                    st.markdown("**Query Results:**")
+                    st.dataframe(part["df"])
+    else:
+        st.session_state["messages"].append({"role": "assistant", "content": [{"type": "text", "text": api_response["error"]}]})
+        with st.chat_message("assistant"):
+            st.markdown(api_response["error"])
 
 # ---------------------------
 # Sidebar
@@ -116,5 +174,6 @@ with st.sidebar:
     st.write(f"**Role:** {ROLE}")
     st.write(f"**Warehouse:** {WAREHOUSE}")
     st.write(f"**Database.Schema:** {DATABASE}.{SCHEMA}")
+    st.write(f"**Semantic Model:** {SEMANTIC_MODEL}")
     st.divider()
     st.caption("Built with Streamlit + Snowflake Cortex Analyst")
