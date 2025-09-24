@@ -1,5 +1,14 @@
 streamlit
-snowflake-connector-python
-python-dotenv
-pandas
+
 requests
+
+snowflake-connector-python
+
+pandas
+
+snowflake-snowpark-python
+
+snowflake-core
+
+plotly
+ 
