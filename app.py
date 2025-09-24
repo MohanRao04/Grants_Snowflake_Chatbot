@@ -637,7 +637,7 @@ else:
     st.title("Cortex AI-PBCS Assistant by DiLytics")
     semantic_model_filename = SEMANTIC_MODEL.split("/")[-1]
     st.markdown(f"Semantic Model: `{semantic_model_filename}`")
-    init_service_metadata()
+    # init_service_metadata()
 
     # Display welcome message only once, outside of chat history loop
     if not st.session_state.welcome_displayed:
