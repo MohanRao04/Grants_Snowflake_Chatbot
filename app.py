@@ -64,8 +64,8 @@ if "current_summary" not in st.session_state:
     st.session_state.current_summary = None
 if "service_metadata" not in st.session_state:
     st.session_state.service_metadata = []
-if "selected_cortex_search_service" not in st.session_state:
-    st.session_state.selected_cortex_search_service = CORTEX_SEARCH_SERVICES
+# if "selected_cortex_search_service" not in st.session_state:
+#     st.session_state.selected_cortex_search_service = CORTEX_SEARCH_SERVICES
 if "model_name" not in st.session_state:
     st.session_state.model_name = "mistral-large"
 if "num_retrieved_chunks" not in st.session_state:
