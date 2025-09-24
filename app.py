@@ -16,7 +16,6 @@ DATABASE = "GRANTS"
 SCHEMA = "GS"
 API_ENDPOINT = "/api/v2/cortex/agent:run"
 API_TIMEOUT = 50000  # in milliseconds
-#CORTEX_SEARCH_SERVICES = "AI.DWH_MART.PBCS_SEARCH_SERVICE"
 SEMANTIC_MODEL = '@"GRANTS"."GS"."GSTAGE"/GRANTS_CHATBOT.yaml'
 
 # Model options
@@ -62,14 +61,8 @@ if "current_sql" not in st.session_state:
     st.session_state.current_sql = None
 if "current_summary" not in st.session_state:
     st.session_state.current_summary = None
-if "service_metadata" not in st.session_state:
-    st.session_state.service_metadata = []
-# if "selected_cortex_search_service" not in st.session_state:
-#     st.session_state.selected_cortex_search_service = CORTEX_SEARCH_SERVICES
 if "model_name" not in st.session_state:
     st.session_state.model_name = "mistral-large"
-if "num_retrieved_chunks" not in st.session_state:
-    st.session_state.num_retrieved_chunks = 100
 if "num_chat_messages" not in st.session_state:
     st.session_state.num_chat_messages = 10
 if "use_chat_history" not in st.session_state:
@@ -128,16 +121,6 @@ def start_new_conversation():
     st.session_state.welcome_displayed = False
     st.session_state.rerun_trigger = True
 
-# Initialize service metadata
-# def init_service_metadata():
-#     st.session_state.service_metadata = [{"name": "PBCS_SEARCH_SERVICE", "search_column": ""}]
-#     st.session_state.selected_cortex_search_service = "PBCS_SEARCH_SERVICE"
-#     try:
-#         svc_search_col = session.sql("DESC CORTEX SEARCH SERVICE PBCS_SEARCH_SERVICE;").collect()[0]["search_column"]
-#         st.session_state.service_metadata = [{"name": "PBCS_SEARCH_SERVICE", "search_column": svc_search_col}]
-#     except Exception as e:
-#         st.error(f"❌ Failed to verify PBCS_SEARCH_SERVICE: {str(e)}. Using default configuration.")
-
 # Initialize config options
 def init_config_options():
     st.sidebar.button("Clear conversation", on_click=start_new_conversation)
@@ -145,13 +128,6 @@ def init_config_options():
     st.sidebar.toggle("Use chat history", key="use_chat_history", value=True)
     with st.sidebar.expander("Advanced options"):
         st.selectbox("Select model:", MODELS, key="model_name")
-        st.number_input(
-            "Select number of context chunks",
-            value=100,
-            key="num_retrieved_chunks",
-            min_value=1,
-            max_value=400
-        )
         st.number_input(
             "Select number of messages to use in chat history",
             value=10,
@@ -161,29 +137,6 @@ def init_config_options():
         )
     if st.session_state.debug_mode:
         st.sidebar.expander("Session State").write(st.session_state)
-
-# Query cortex search service
-# def query_cortex_search_service(query):
-#     db, schema = session.get_current_database(), session.get_current_schema()
-#     root = Root(session)
-#     cortex_search_service = (
-#         root.databases[db]
-#         .schemas[schema]
-#         .cortex_search_services[st.session_state.selected_cortex_search_service]
-#     )
-#     context_documents = cortex_search_service.search(
-#         query, columns=[], limit=st.session_state.num_retrieved_chunks
-#     )
-#     results = context_documents.results
-#     service_metadata = st.session_state.service_metadata
-#     search_col = [s["search_column"] for s in service_metadata
-#                   if s["name"] == st.session_state.selected_cortex_search_service][0]
-#     context_str = ""
-#     for i, r in enumerate(results):
-#         context_str += f"Context document {i+1}: {r[search_col]} \n\n"
-#     if st.session_state.debug_mode:
-#         st.sidebar.text_area("Context documents", context_str, height=500)
-#     return context_str
 
 # Get chat history
 def get_chat_history():
@@ -214,114 +167,107 @@ def make_chat_history_summary(chat_history, question):
         st.sidebar.text_area("Chat history summary", summary.replace("$", "\$"), height=150)
     return summary
 
-# Create prompt with enhanced instructions for unstructured queries
-# def create_prompt(user_question):
-#     chat_history_str = ""
-#     previous_results_str = ""
-#     query_lower = user_question.lower()
-#     specific_keywords = ["metric", "describe", "reports", "facts", "Explain", "logic", "behind"]
-#     is_specific_unstructured = any(keyword in query_lower for keyword in specific_keywords)
+# Create prompt with enhanced instructions for unstructured queries (without search)
+def create_prompt(user_question):
+    chat_history_str = ""
+    previous_results_str = ""
+    query_lower = user_question.lower()
+    specific_keywords = ["metric", "describe", "reports", "facts", "Explain", "logic", "behind"]
+    is_specific_unstructured = any(keyword in query_lower for keyword in specific_keywords)
     
-#     if st.session_state.use_chat_history:
-#         chat_history = get_chat_history()
-#         if chat_history:
-#             question_summary = make_chat_history_summary(chat_history, user_question)
-#             prompt_context = query_cortex_search_service(question_summary)
-#             chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
-#         else:
-#             prompt_context = query_cortex_search_service(user_question)
-#     else:
-#         prompt_context = query_cortex_search_service(user_question)
-#         chat_history = []
+    if st.session_state.use_chat_history:
+        chat_history = get_chat_history()
+        if chat_history:
+            question_summary = make_chat_history_summary(chat_history, user_question)
+            chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
+        else:
+            chat_history = []
+    else:
+        chat_history = []
     
-#     # Include previous query results in the context if available
-#     if st.session_state.current_results is not None and not st.session_state.current_results.empty:
-#         previous_results_str = st.session_state.current_results.to_string(index=False)
-#         prompt_context += f"\n\nPrevious Query Results:\n{previous_results_str}"
+    # Include previous query results in the context if available
+    if st.session_state.current_results is not None and not st.session_state.current_results.empty:
+        previous_results_str = st.session_state.current_results.to_string(index=False)
     
-#     if not prompt_context.strip():
-#         return complete(st.session_state.model_name, user_question)
-    
-#     if is_specific_unstructured:
-#         if "metric" in query_lower:
-#             if re.search(r'fy\s?\d{2}-\d{2}', query_lower):
-#                 fiscal_year = re.search(r'fy\s?(\d{2}-\d{2})', query_lower).group(1)
-#                 prompt_instruction = (
-#                     f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system for FY {fiscal_year}. "
-#                     f"Describe the metric’s definition (e.g., Allocated FTE, Total Amount), calculation logic (e.g., aggregation of position or financial data), "
-#                     f"join conditions (e.g., tables like POSITION_FACT or LINE_ITEM joined with dimensions like ORGANIZATION or FUND), "
-#                     f"filter conditions (e.g., specific versions like COUNCIL1 or scenarios like FORECASTING), "
-#                     f"and its business significance in budgeting or planning. Include relevant dimensions (e.g., Organization, Fund, Version). "
-#                     f"Ensure the response is clear, concise, avoids document references, and directly addresses the metric."
-#                 )
-#             else:
-#                 prompt_instruction = (
-#                     f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
-#                     f"Describe the metric’s definition (e.g., Allocated FTE, Total Amount), calculation logic (e.g., formulas, data sources like position or financial data), "
-#                     f"join conditions (e.g., tables like POSITION_FACT or LINE_ITEM joined with dimensions), "
-#                     f"filter conditions (e.g., specific versions or scenarios), "
-#                     f"and its business significance in budgeting or planning. "
-#                     f"Ensure the response is clear, specific, avoids document references, and directly addresses the metric."
-#                 )
-#         elif "facts" in query_lower:
-#             prompt_instruction = (
-#                 f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
-#                 f"Explain the fact table’s purpose (e.g., LINE_ITEM_FACT or POSITION_FACT), key metrics (e.g., measures like FTE, financial amounts, or headcount), "
-#                 f"its role in budgeting or analysis, join conditions with dimension tables (e.g., ORGANIZATION, FUND, PROGRAM), "
-#                 f"and filter conditions used in queries. Include specific dimensions it integrates with. "
-#                 f"Ensure the response is clear, specific, avoids document references, and directly addresses the fact."
-#             )
-#         elif "reports" in query_lower:
-#             prompt_instruction = (
-#                 f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
-#                 f"Describe the report’s purpose, key metrics or data presented, data sources (e.g., fact tables like LINE_ITEM_FACT), "
-#                 f"join conditions (e.g., joins with dimension tables like ORGANIZATION or PROGRAM), "
-#                 f"filter conditions (e.g., specific fiscal years or versions), and its business use case in budgeting or planning. "
-#                 f"Ensure the response is clear, specific, avoids document references, and directly addresses the report."
-#             )
-#         elif "join" in query_lower or "filter" in query_lower:
-#             prompt_instruction = (
-#                 f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
-#                 f"Explain the join conditions (e.g., tables like POSITION_FACT or LINE_ITEM_FACT joined with dimensions like ORGANIZATION, FUND, or PROGRAM) "
-#                 f"and filter conditions (e.g., specific versions like COUNCIL1, scenarios like FORECASTING, or fiscal years) used in the data model. "
-#                 f"Describe their purpose and impact on query results in budgeting or planning. "
-#                 f"Ensure the response is clear, specific, avoids document references, and directly addresses the query."
-#             )
-#         else:
-#             prompt_instruction = (
-#                 f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
-#                 f"Describe the system, feature, or concept, including its purpose, key components, and business significance. "
-#                 f"Include relevant details about data sources, join conditions, or filter conditions if applicable. "
-#                 f"Ensure the response is clear, specific, avoids document references, and directly addresses the query."
-#             )
-#     else:
-#         prompt_instruction = (
-#             f"You are a helpful AI chat assistant with RAG capabilities. When a user asks you a question, "
-#             f"you will also be given context provided between <context> and </context> tags. Use that context "
-#             f"with the user's chat history provided between <chat_history> and </chat_history> tags "
-#             f"to provide a summary that addresses the user's question. Ensure the answer is coherent, concise, "
-#             f"and directly relevant to the user's question. "
-#             f"If the user asks a generic question which cannot be answered with the given context or chat_history, "
-#             f"just respond directly and concisely to the user's question using the LLM."
-#         )
+    if is_specific_unstructured:
+        if "metric" in query_lower:
+            if re.search(r'fy\s?\d{2}-\d{2}', query_lower):
+                fiscal_year = re.search(r'fy\s?(\d{2}-\d{2})', query_lower).group(1)
+                prompt_instruction = (
+                    f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system for FY {fiscal_year}. "
+                    f"Describe the metric’s definition (e.g., Allocated FTE, Total Amount), calculation logic (e.g., aggregation of position or financial data), "
+                    f"join conditions (e.g., tables like POSITION_FACT or LINE_ITEM joined with dimensions like ORGANIZATION or FUND), "
+                    f"filter conditions (e.g., specific versions like COUNCIL1 or scenarios like FORECASTING), "
+                    f"and its business significance in budgeting or planning. Include relevant dimensions (e.g., Organization, Fund, Version). "
+                    f"Ensure the response is clear, concise, avoids document references, and directly addresses the metric."
+                )
+            else:
+                prompt_instruction = (
+                    f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
+                    f"Describe the metric’s definition (e.g., Allocated FTE, Total Amount), calculation logic (e.g., formulas, data sources like position or financial data), "
+                    f"join conditions (e.g., tables like POSITION_FACT or LINE_ITEM joined with dimensions), "
+                    f"filter conditions (e.g., specific versions or scenarios), "
+                    f"and its business significance in budgeting or planning. "
+                    f"Ensure the response is clear, specific, avoids document references, and directly addresses the metric."
+                )
+        elif "facts" in query_lower:
+            prompt_instruction = (
+                f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
+                f"Explain the fact table’s purpose (e.g., LINE_ITEM_FACT or POSITION_FACT), key metrics (e.g., measures like FTE, financial amounts, or headcount), "
+                f"its role in budgeting or analysis, join conditions with dimension tables (e.g., ORGANIZATION, FUND, PROGRAM), "
+                f"and filter conditions used in queries. Include specific dimensions it integrates with. "
+                f"Ensure the response is clear, specific, avoids document references, and directly addresses the fact."
+            )
+        elif "reports" in query_lower:
+            prompt_instruction = (
+                f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
+                f"Describe the report’s purpose, key metrics or data presented, data sources (e.g., fact tables like LINE_ITEM_FACT), "
+                f"join conditions (e.g., joins with dimension tables like ORGANIZATION or PROGRAM), "
+                f"filter conditions (e.g., specific fiscal years or versions), and its business use case in budgeting or planning. "
+                f"Ensure the response is clear, specific, avoids document references, and directly addresses the report."
+            )
+        elif "join" in query_lower or "filter" in query_lower:
+            prompt_instruction = (
+                f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
+                f"Explain the join conditions (e.g., tables like POSITION_FACT or LINE_ITEM_FACT joined with dimensions like ORGANIZATION, FUND, or PROGRAM) "
+                f"and filter conditions (e.g., specific versions like COUNCIL1, scenarios like FORECASTING, or fiscal years) used in the data model. "
+                f"Describe their purpose and impact on query results in budgeting or planning. "
+                f"Ensure the response is clear, specific, avoids document references, and directly addresses the query."
+            )
+        else:
+            prompt_instruction = (
+                f"Provide a detailed and concise explanation for the query '{user_question}' in the context of the Planning and Budgeting system. "
+                f"Describe the system, feature, or concept, including its purpose, key components, and business significance. "
+                f"Include relevant details about data sources, join conditions, or filter conditions if applicable. "
+                f"Ensure the response is clear, specific, avoids document references, and directly addresses the query."
+            )
+    else:
+        prompt_instruction = (
+            f"You are a helpful AI chat assistant. When a user asks you a question, "
+            f"use the user's chat history provided between <chat_history> and </chat_history> tags "
+            f"to provide a summary that addresses the user's question. Ensure the answer is coherent, concise, "
+            f"and directly relevant to the user's question. "
+            f"If the user asks a generic question which cannot be answered with the given chat_history, "
+            f"just respond directly and concisely to the user's question using the LLM."
+        )
 
-#     prompt = f"""
-#         [INST]
-#         {prompt_instruction}
+    prompt = f"""
+        [INST]
+        {prompt_instruction}
 
-#         <chat_history>
-#         {chat_history_str}
-#         </chat_history>
-#         <context>
-#         {prompt_context}
-#         </context>
-#         <question>
-#         {user_question}
-#         </question>
-#         [/INST]
-#         Answer:
-#     """
-#     return complete(st.session_state.model_name, prompt)
+        <chat_history>
+        {chat_history_str}
+        </chat_history>
+        <previous_results>
+        {previous_results_str}
+        </previous_results>
+        <question>
+        {user_question}
+        </question>
+        [/INST]
+        Answer:
+    """
+    return complete(st.session_state.model_name, prompt)
 
 # Authentication logic
 if not st.session_state.authenticated:
@@ -387,16 +333,16 @@ else:
         ]
         return any(re.search(pattern, query.lower()) for pattern in structured_patterns)
 
-    # def is_unstructured_query(query: str):
-    #     unstructured_keywords = [
-    #         "metric", "describe", "reports", "facts", "join", "filter", "explain", "summary",
-    #         "policy", "document", "description", "highlight", "guidelines", "procedure",
-    #         "how to", "define", "definition", "rules", "steps", "overview", "objective",
-    #         "purpose", "benefits", "importance", "impact", "details", "regulation",
-    #         "requirement", "compliance", "when to", "where to", "meaning", "interpretation",
-    #         "clarify", "note", "explanation", "instructions"
-    #     ]
-    #     return any(keyword in query.lower() for keyword in unstructured_keywords)
+    def is_unstructured_query(query: str):
+        unstructured_keywords = [
+            "metric", "describe", "reports", "facts", "join", "filter", "explain", "summary",
+            "policy", "document", "description", "highlight", "guidelines", "procedure",
+            "how to", "define", "definition", "rules", "steps", "overview", "objective",
+            "purpose", "benefits", "importance", "impact", "details", "regulation",
+            "requirement", "compliance", "when to", "where to", "meaning", "interpretation",
+            "clarify", "note", "explanation", "instructions"
+        ]
+        return any(keyword in query.lower() for keyword in unstructured_keywords)
 
     def is_complete_query(query: str):
         complete_patterns = [r'\b(generate|write|create|describe|explain)\b']
@@ -468,18 +414,13 @@ else:
                         st.error(f"❌ Failed to parse SSE data: {str(e)} - Data: {data_str}")
         return events
 
-    def snowflake_api_call(query: str, is_structured: bool = False):
+    def snowflake_api_call(query: str, is_structured: bool = True):
         payload = {
             "model": st.session_state.model_name,
             "messages": [{"role": "user", "content": [{"type": "text", "text": query}]}],
-            "tools": []
+            "tools": [{"tool_spec": {"type": "cortex_analyst_text_to_sql", "name": "analyst1"}}],
+            "tool_resources": {"analyst1": {"semantic_model_file": SEMANTIC_MODEL}}
         }
-        if is_structured:
-            payload["tools"].append({"tool_spec": {"type": "cortex_analyst_text_to_sql", "name": "analyst1"}})
-            payload["tool_resources"] = {"analyst1": {"semantic_model_file": SEMANTIC_MODEL}}
-        else:
-            payload["tools"].append({"tool_spec": {"type": "cortex_search", "name": "search1"}})
-            payload["tool_resources"] = {"search1": {"name": st.session_state.selected_cortex_search_service, "max_results": st.session_state.num_retrieved_chunks}}
         try:
             resp = requests.post(
                 url=f"https://{HOST}{API_ENDPOINT}",
@@ -503,19 +444,14 @@ else:
         except Exception:
             return None
 
-    # def summarize_unstructured_answer(answer):
-    #     sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|")\s+', answer)
-    #     return "\n".join(f"- {sent.strip()}" for sent in sentences[:6] if sent.strip())
-
     def suggest_sample_questions(query: str) -> List[str]:
         # Return the first 5 questions from the predefined sample_questions list
         return sample_questions[:5]
 
     def process_sse_response(response, is_structured):
         sql = ""
-        search_results = []
         if not response:
-            return sql, search_results
+            return sql
         try:
             for event in response:
                 if event.get("event") == "message.delta" and "data" in event:
@@ -530,12 +466,10 @@ else:
                                         result_data = result.get("json", {})
                                         if is_structured and "sql" in result_data:
                                             sql = result_data.get("sql", "")
-                                        elif not is_structured and "searchResults" in result_data:
-                                            search_results = [sr["text"] for sr in result_data["searchResults"]]
         except Exception as e:
             st.error(f"❌ Error Processing Response: {str(e)}")
-            return sql, search_results
-        return sql.strip(), search_results
+            return sql
+        return sql.strip()
 
     def display_chart_tab(df: pd.DataFrame, prefix: str = "chart", query: str = ""):
         if df.empty or len(df.columns) < 2:
@@ -637,7 +571,6 @@ else:
     st.title("Cortex AI-PBCS Assistant by DiLytics")
     semantic_model_filename = SEMANTIC_MODEL.split("/")[-1]
     st.markdown(f"Semantic Model: `{semantic_model_filename}`")
-    # init_service_metadata()
 
     # Display welcome message only once, outside of chat history loop
     if not st.session_state.welcome_displayed:
@@ -801,7 +734,7 @@ else:
 
             elif is_structured:
                 response = snowflake_api_call(query, is_structured=True)
-                sql, _ = process_sse_response(response, is_structured=True)
+                sql = process_sse_response(response, is_structured=True)
                 if sql:
                     results = run_snowflake_query(sql)
                     if results is not None and not results.empty:
@@ -842,15 +775,10 @@ else:
                     assistant_response["content"] = response_content
 
             else:
-                response = snowflake_api_call(query, is_structured=False)
-                _, search_results = process_sse_response(response, is_structured=False)
-                if search_results:
-                    raw_result = search_results[0]
-                    summary = create_prompt(query)
-                    if summary:
-                        response_content = summary
-                    else:
-                        response_content = summarize_unstructured_answer(raw_result)
+                # Fallback for other queries: use COMPLETE directly
+                response = complete(st.session_state.model_name, query)
+                if response:
+                    response_content = response
                     with response_placeholder:
                         with st.chat_message("assistant"):
                             st.markdown(response_content, unsafe_allow_html=True)
