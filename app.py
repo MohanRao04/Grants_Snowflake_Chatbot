@@ -597,7 +597,7 @@ else:
     # Display chat history without chat bubbles for assistant, skipping the welcome message
     for idx, message in enumerate(st.session_state.chat_history):
         # Skip the welcome message since it's already displayed above
-        if idx == 0 and message["content"] == "Hi, I am your PBCS Assistant. I can help you explore data, insights and analytics on PBCS (Planning and Budgeting insight solution).":
+        if idx == 0 and message["content"] == "Hi, I am your GRANTS Assistant. I can help you explore data, insights and analytics on GRANTS.":
             continue
         if message["role"] == "user":
             with st.chat_message("user"):
