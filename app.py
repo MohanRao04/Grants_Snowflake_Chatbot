@@ -584,14 +584,12 @@ else:
 
     st.sidebar.subheader("Sample Questions")
     sample_questions = [
-        "What kind of data can i get using this assistant?",
-        "What are the key subject areas covered in the solution?",
-        "Top 10 Total Amount by Organization and Version?",
-        "Show the top 5 programs with the highest net increase in budget between FY16-17 and FY17-18?",
-        "What are the allocated FTE and allocated amounts for project PJ_1000001 in FY16-17 and FY17-18 under the Working or Final version?",
-        "Give me the data for which Position, Award, and Fund contribute most to the year-on-year budget variance?",
-        "Explain the logic behind Allocated FTE metric?",
-        "Explain the logic behind Net Incr/Decr metric?"
+        "What is the Total Burdened Cost?",
+        "Top 10 Projects by Total Burdened Cost?",
+        "What is the count of Total No of Awards and Projects?",
+        "What is the Original Budget, Current Budget and Total Burdened Cost?",
+        "What are the top funding sources?",
+        "Give me the data for which Project, Award, and Fund contribute most to the year-on-year budget variance?"
     ]
 
     # Display chat history without chat bubbles for assistant, skipping the welcome message
