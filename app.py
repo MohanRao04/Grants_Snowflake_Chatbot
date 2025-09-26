@@ -568,7 +568,7 @@ else:
                 "- [Contact Support](https://support.snowflake.com/s/)"
             )
 
-    st.title("Cortex AI-PBCS Assistant by DiLytics")
+    st.title("Cortex AI-GRANTS Assistant by DiLytics")
     semantic_model_filename = SEMANTIC_MODEL.split("/")[-1]
     st.markdown(f"Semantic Model: `{semantic_model_filename}`")
 
