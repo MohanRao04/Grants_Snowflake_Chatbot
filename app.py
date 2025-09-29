@@ -588,8 +588,7 @@ else:
         "Top 10 Projects by Total Burdened Cost?",
         "What is the count of Total No of Awards and Projects?",
         "What is the Original Budget, Current Budget and Total Burdened Cost?",
-        "What are the top funding sources?",
-        "Give me the data for which Project, Award, and Fund contribute most to the year-on-year budget variance?"
+        "What are the top funding sources?"
     ]
 
     # Display chat history without chat bubbles for assistant, skipping the welcome message
