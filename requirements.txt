@@ -10,7 +10,7 @@ snowflake-snowpark-python>=1.11.0
 snowflake-core
 requests>=2.28.0
 plotly>=5.15.0
- 
+
 # Networking & security
 requests==2.32.3
 retrying
